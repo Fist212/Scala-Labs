@@ -13,69 +13,73 @@ def integral(f:Double => Double, l:Double, r:Double, steps:Int):Double = {
 def func(x:Double):Double = x*x
 
 def goodEnoughPassword(password:String):Option[Boolean] = {
-  if (password.length()>=8 && password.exists(_.isDigit) && password.exists(_.isUpper) && password.exists(_.isLower)){
-  Some(true) 
-  }
-  else{
-    None
-  }
+  val filtersColl: Seq[String=>Boolean] = 
+  Seq(p => p.length()>=8, 
+      p => p.exists(_.isDigit), 
+      p => p.exists(_.isUpper), 
+      p => p.exists(_.isLower))
+
+  val combinedFilter = filtersColl.reduce((f1,f2) => x=> f1(x) && f2(x))
+  
+  //если результат не None, применяем .map(_ => true), чтобы вернуть Some(true)
+  Some(password).filter(combinedFilter).map(_ => true)
 }
+
 
 def goodEnoughPassword2(password:String):Either[Boolean, String] = {
-
-  val resultCheck: Try[(Boolean,Boolean,Boolean,Boolean)] = Try {
-    (password.length()>=8, password.exists(_.isDigit),password.exists(_.isUpper), password.exists(_.isLower))
-  }  
-
-  resultCheck match
-  case Success((true, true, true, true)) => Left(true)
-  case Success((lengthOk, hasDigit, hasUpper, hasLower)) =>
-    val errors = List(
-      lengthOk -> "Длина пароля менее 8 символов",
-      hasDigit -> "Пароль должен содержать минимум одну цифру",
-      hasUpper -> "Пароль должен иметь хотя бы одну заглавную букву",
-      hasLower -> "Пароль должен иметь хотя бы одну прописную букву"
-    ).collect { case (false, msg) => msg }
-    Right(errors.mkString(", "))
-  case Failure(exemption) => Right("С паролем полная беда")
-}
-
-def readPassword():Future[String]={
-
-  var result = Future{
-    var passwordValid = false
-    var password = ""
-
-    while(passwordValid!=true){
-      println("Введите пароль. (Минимум: длина 8, одна цифра, одна заглавная буква, одна прописная буква.)")
-      password = readLine()
-
-      goodEnoughPassword2(password) match
-        case Left(true) => println("Пароль верный")
-          passwordValid = true
-        case Right(errors) => println(errors)
-    }
-    password
-}
-  result.onComplete{
-    case Success(password) => println(s"Введенный пароль: $password")
-    case Failure(exception) => println(s"Произошла ошибка!")
+      Try{
+      Seq((password.length()>=8) -> "Длина пароля менее 8 символов", 
+      password.exists(_.isDigit) -> "Пароль должен содержать минимум одну цифру", 
+      password.exists(_.isUpper)-> "Пароль должен иметь хотя бы одну заглавную букву", 
+      password.exists(_.isLower) -> "Пароль должен иметь хотя бы одну прописную букву").collect{ 
+      case (false, errorMessage) => Right(errorMessage) }.headOption.getOrElse(Left(true))  
+      }
+      match {
+        case Success(result) => result
+        case Failure(_) => Right("Какая-то ошибка")
   }
-  result
+
+}
+
+def readPassword(): Future[String] = {
+  Future {
+    readPasswordFromUser()
+  }
+}
+
+def readPasswordFromUser(): String = {
+  println("Введите пароль. (Минимум: длина 8, одна цифра, одна заглавная буква, одна прописная буква.)")
+  val password = readLine()
+
+  goodEnoughPassword2(password) match {
+    case Left(_) => password
+    case Right(errors) =>
+      println(errors)
+      readPasswordFromUser()  
+  }
 }
 
 @main def start()= {
   val res = integral(func,2.0,10.0,1000)
+  println("Первое задание")
   println(s"Интеграл численно равен: $res")
 
+  println("")
+  println("Второе задание Option")
   println(goodEnoughPassword("Password123"))
+  println(goodEnoughPassword("Pass"))
 
+  println("")
+  println("Третье задание Try")
   println(goodEnoughPassword2("Password123"))
   println(goodEnoughPassword2("password"))
   println(goodEnoughPassword2("pass"))
 
+  println("")
+  println("Четверное задание Future")
   var password=readPassword()
-  Await.result(password, Duration.Inf)
+  var resultPassword = Await.result(password, Duration.Inf)
+  println(s"Успешный пароль: $resultPassword")
 }
 
 trait Monad[M[_]] { // Обобщенный тип, представляющий монаду. М - контейнер (Option, List...), может содержать тип A (Int, String...)
