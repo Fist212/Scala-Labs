@@ -38,7 +38,7 @@ object GreeterBot {
     bot(0, max) // Начинаем с нуля
   }
 
-  // Рекурсивное поведение бота для обработки сообщений (пока счетчик !=0)
+  // Рекурсивное поведение бота для обработки сообщений 
   private def bot(greetingCounter: Int, max: Int): Behavior[Greeter.Greeted] =
     Behaviors.receive { (context, message) =>
       val n = greetingCounter + 1 // Увеличиваем счетчик
