@@ -1,83 +1,90 @@
 package com.example
 
-import akka.actor.typed.ActorRef
-import akka.actor.typed.ActorSystem
-import akka.actor.typed.Behavior
+import akka.actor.typed.{ActorRef, ActorSystem, Behavior}
 import akka.actor.typed.scaladsl.Behaviors
-import scala.util.Random
 
-// Актор для вычисления интеграла на части интервала
+// Актор, вычисляющий интеграл
 object IntegralActor {
-  case class integralCalculate(f: Double => Double, l: Double, r: Double, steps: Int, replyTo: ActorRef[Result])
+  case class Calculate(start: Double, end: Double, numSteps: Int, replyTo: ActorRef[Result])
   case class Result(value: Double)
 
-  def apply(): Behavior[integralCalculate] = Behaviors.receive { (context, message) =>
-    // Вычисление шага для метода численного интегрирования
-    val h = (message.r - message.l) / message.steps
-    // Вычисление суммы значений функции на интервале
-    val result = (1 until message.steps).map(x => h * message.f(message.l + x * h)).reduce(_ + _)
-    message.replyTo ! Result(result)
+  def apply(): Behavior[Calculate] = Behaviors.receive { (context, message) =>
+    val step = (message.end - message.start) / message.numSteps
+    val intermediateSum = (1 until message.numSteps).map { i =>
+      val x = message.start + i * step
+      f(x)
+    }.sum
+    val result = (f(message.start) + f(message.end)) / 2 + intermediateSum
+    val integral = result * step
+    message.replyTo ! Result(integral)
     Behaviors.same
   }
 
-  // Функция для интегрирования (в данном случае x^2)
-  def func(x: Double): Double = x * x
+  private def f(x: Double): Double = x * x
 }
 
-// Актор для суммирования частичных результатов интеграции
+// Актор, суммирующий частитчные результаты
 object SumActor {
-  case class AddResult(sum: Double)
+  case class AddResult(sum: Double, remainingResults: Int)
+  case class FinalResult(result: Double)
 
-  def apply(): Behavior[AddResult] = Behaviors.setup { (context) =>
-    var finalSum = 0.0  
-    Behaviors.receiveMessage {
-      // Обработка получения частичной суммы
-      case AddResult(sum) =>
-        finalSum += sum  
-        context.log.info(s"Partial sum: $sum, current value: $finalSum")  
-        Behaviors.same
-    }
-  }
-}
-
-// Главный актор, управляющий вычислением интеграла
-object MainActor {
-  case class StartCalculation(l: Double, r: Double, steps: Int)
-
-  def apply(): Behavior[StartCalculation] = Behaviors.setup { (context) =>
-    val integralActor = context.spawn(IntegralActor(), "integralActor")
-    val sumActor = context.spawn(SumActor(), "sumActor")
-
-    // Метод для отправки запроса на вычисление интеграла
-    def sendCalculation(f: Double => Double, l: Double, r: Double, steps: Int, replyTo: ActorRef[IntegralActor.Result]): Unit = {
-      integralActor ! IntegralActor.integralCalculate(f, l, r, steps, replyTo)
-    }
+  def apply(): Behavior[AddResult] = Behaviors.setup { context =>
+    var totalSum = 0.0
+    var resultsLeft = 0
 
     Behaviors.receiveMessage {
-      // Обработка сообщения на запуск вычисления интеграла
-      case StartCalculation(l, r, steps) =>
-        val numActors = 4  
-        val stepSize = (r - l) / numActors  
-        (0 until numActors).foreach { i =>
-          val partLeft = l + i * stepSize
-          val partRight = partLeft + stepSize
-          val numStepsPerPart = steps / numActors
-          
-          // Спавним актор для получения частичного результата и отправки его в SumActor
-          val replyTo = context.spawn(Behaviors.receiveMessage[IntegralActor.Result] {
-            case IntegralActor.Result(partialSum) =>
-              sumActor ! SumActor.AddResult(partialSum)
-              Behaviors.same
-          }, s"responseActor-${i}")  
-          // Отправляем запрос на вычисление интеграла для текущей части интервала
-          sendCalculation(IntegralActor.func, partLeft, partRight, numStepsPerPart, replyTo)
+      case AddResult(sum, remainingResults) =>
+        totalSum += sum
+        resultsLeft = remainingResults
+        context.log.info(s"Partial sum: $sum. Current total: $totalSum. Remaining results: $resultsLeft")
+
+        if (resultsLeft == 0) {
+          context.log.info(s"Final result: $totalSum")
         }
         Behaviors.same
     }
   }
 }
 
+// Главный актор
+object MainActor {
+  case class StartCalculation(start: Double, end: Double, steps: Int)
+
+  def apply(): Behavior[StartCalculation] = Behaviors.setup { context =>
+    val integralActor = context.spawn(IntegralActor(), "IntegralActor")
+    val sumActor = context.spawn(SumActor(), "SumActor")
+
+    def distributeCalculations(start: Double, end: Double, steps: Int, numActors: Int): Unit = {
+      val stepSize = (end - start) / steps
+      val stepsPerActor = steps / numActors
+      val rangePerActor = (end - start) / numActors
+      var remainingResults = numActors
+
+      (0 until numActors).foreach { i =>
+        val actorStart = start + i * rangePerActor
+        val actorEnd = actorStart + rangePerActor
+
+        val replyTo = context.spawn(Behaviors.receiveMessage[IntegralActor.Result] {
+          case IntegralActor.Result(partialSum) =>
+            remainingResults -= 1
+            sumActor ! SumActor.AddResult(partialSum, remainingResults)
+            Behaviors.same
+        }, s"ResponseActor-$i")
+
+        integralActor ! IntegralActor.Calculate(actorStart, actorEnd, stepsPerActor, replyTo)
+      }
+    }
+
+    Behaviors.receiveMessage {
+      case StartCalculation(start, end, steps) =>
+        val numActors = 4
+        distributeCalculations(start, end, steps, numActors)
+        Behaviors.same
+    }
+  }
+}
+
 @main def Main(): Unit = {
-  val system = ActorSystem(MainActor(), "main")
-  system ! MainActor.StartCalculation(0, 10, 1500)
+  val system = ActorSystem(MainActor(), "MainActorSystem")
+  system ! MainActor.StartCalculation(0, 5, 1000)
 }
